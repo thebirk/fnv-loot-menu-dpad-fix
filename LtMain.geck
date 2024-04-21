@@ -1,0 +1,733 @@
+scn LtMMainSCRIPT
+
+; DISPATCHES EVENT
+; Dispatches the 'LtMSelectedItem' event
+; Parameters:
+;	CurrentItem: The current item selected in the loot menu
+;				NOTE: The returned item can be either a base object or a world ref!
+;
+; 	Secondary: If the event is dispatched and the parameters does not contain the above
+;				key, then the event signifies that the HUD has been turned off.
+
+
+; Main Control Vars
+int bActiveLoot		; Is looting possible on this object
+int bToggleControls	; Handles the control enable/disable processing
+int bRefresh		; Item has been taken, refresh UI
+int bKeyTrap		; Holds key state so it's not read multiple times
+int bCloseContainer	; Tells us a container was set to open state and to close it when moving away
+int bKeyTrap2
+int bKeyTrap3
+int bMenuMode		; Toggled in menu mode to re-enable when coming out
+int bFOVSaved		; Don't re-capture current FOV data if we already have it
+int iDirection		; Control direction of scrolling up or down: -1=Up, 1=Down, 0=Default, 2=Run but no change
+int bDpadUpLast		; State of the dpad up last frame, used to track when a key is pressed the first time
+int bDpadDownLast	; State of the dpad up last frame, used to track when a key is pressed the first time
+int bDpadUp			; State of dpad up this frame
+int bDpadDown		; State of dpad down this frame
+int iDpadUpHeld		; Number of frames dpad up has been held without changing state. Used to detect fast scroll
+int iDpadDownHeld	; Number of frames dpad down has been held without changing state. Used to detect fast scroll
+int bDpadUpFinal	; Final state based on current and prev and held
+int bDpadDownFinal	; Final state based on current and prev and held
+int bDpadUpRepeating	; If we are currently waiting for repeat dpad up
+int bDpadDownRepeating	; If we are currently waiting for repeat dpad down
+int iDpadUpRepeatCount		; Number of frame since last repeated dpad up
+int iDpadDownRepeatCount	; Number of frame since last repeated dpad down
+int iDpadInitialDelay ; Number of frames dpad has to be held before we start keyrepeats
+int iDpadRepeatDelay ; Number of frames to delay between each keyrepeat
+int iCannibal		; Cannibal active
+int iRobCo			; Is RobCo Certified loaded
+int iMorePerks		; Is More Perks loaded
+int iMorePerksU		; Is More Perks Update loaded
+int iMorePerksOWB	; Is More Perks for Old World Blues loaded
+ref rSound			; Sound object of the current container
+ref rCurrRef		; Current crosshair object
+ref rPrevRef		; Previous object, used to stop continuous processing
+ref rContRef		; Reference of the container, set this way to handle ash piles
+ref rTribal			; Reference of Tribal Wisdom perk
+ref rRobCo			; Reference of RobCo Certified perk
+ref rCrazed			; Reference of Crazed Inventor perk
+ref rMad			; Reference of Mad Scientist perk
+ref rTech			; Reference of Tech Junkie perk
+ref rRoach			; Reference of Roach Lover perk
+ref rRoachList		; Reference of Roach Lover form list
+ref rField			; Reference of Field Medic perk
+ref rChemical		; Reference of Chemical Engineer perk
+ref rRise			; Reference of Rise and Shine perk
+ref rTechOWB		; Reference of Tech Junkie OWB perk
+ref rGene			; Reference of Gene Splicer perk
+ref rGeneList		; Reference of Gene Splicer forn list
+ref rBase			; Temp reference for getting base form
+
+; HUD vars
+int iOffset			; List offset value of the top of the display list
+int iCurrentIndex	; Current index of selected item
+int iMaxVisible		; Maximum number of items the HUD will show
+int iTotalItems		; Total number of items in the container
+
+; Container Inventory Vars
+int iCounter		; Counts steps through ref loop
+int iItemCount		; Number of a type of item, used for output
+ref rItemTaken		; The item to take from the container
+array_var aContItems	; The base items of the container
+array_var aDropped	; Dropped items for this reference
+array_var aEventParams	; Event parameter string map
+string_var sPath
+int iItemIndex		; Shorthand index for ref loop
+ref rTempRef		; In case of wild references
+
+; MCM Options
+int MinItemsToTake	; Minimum number of items necessary to take all at once
+int TakeAllWeightless	; Whether or not to take all weightless items, bypassing MinItemsToTake
+int MaxVisibleItems	; Maximum number of items visible in the loot menu
+int Width
+int ScreenPosition	; Where on the screen the menu appears. 6 presets: Left/Right Top/Bottom, Center Top/Bottom
+int OffsetX			; Positions on the screen for the box
+int OffsetY
+int TakeKey
+int OpenKey
+int TakeBtn
+int OpenBtn
+int ScrollUpKey
+int ScrollDownKey
+int bUpdateSettings
+int bOpenCloseSounds
+int iButtons
+
+; Storage of settings
+int iControl		; Key code assigned to controls, for keypress detection since IsControlPressed doesn't work
+float fVanityIn
+float fVanityOut
+
+int iBuildRef
+ref rBuildRef
+
+; Container Menu ======================
+BEGIN MenuMode
+	if GetUIFloat "hudmainmenu/lootmenu/_enabled"
+		SetUIFloat "hudmainmenu/lootmenu/_enabled" 0
+		
+		set iButtons to (1 + 2 + TakeBtn + OpenBtn)
+		; Turn controls back on so they work in the menu
+		EnableControl 5	; Activate
+		EnableControl 7	; Reload
+		EnableButton iButtons	; Disables Controller button D-Pad Up, D-Pad Down, X, A
+		
+		; We've been in menu so things need to turn on when we exit
+		set bMenuMode to 1
+		; Toggle controls back off after we leave menu
+		set bToggleControls to 1
+		set bRefresh to 1
+		
+		set rCurrRef to 0
+	endif
+	
+	; Clear refs if in menu on a locked container
+	if testexpr (rCurrRef.GetLocked == 1)
+		set rCurrRef to 0
+		set rPrevRef to 0
+	endif
+END
+
+; Take all by holding Take/Steal key
+
+
+; Initial Settings Setting ======================
+BEGIN GameMode
+
+	if (TakeKey == 0)
+		set MinItemsToTake to 5
+		set TakeAllWeightless to 1
+		set MaxVisibleItems to 5
+		set Width to 350
+		set ScreenPosition to 0
+		set OffsetX to 1000
+		set OffsetY to 300
+		set TakeKey to 18
+		set OpenKey to 19
+		set ScrollUpKey to 264
+		set ScrollDownKey to 265
+		set TakeBtn to 4096
+		set OpenBtn to 16384
+		set bOpenCloseSounds to 0
+		set bDpadUpLast to 0
+		set bDpadDownLast to 0
+		set iDpadInitialDelay to 30
+		set iDpadRepeatDelay to 5
+	endif
+	
+	if ( GetGameLoaded || bUpdateSettings == 1)
+		SetUIFloat "hudmainmenu/lootmenu/_maxVisible" MaxVisibleItems
+		SetUIFloat "hudmainmenu/lootmenu/width" Width
+		SetUIFloat "hudmainmenu/lootmenu/x" OffsetX
+		SetUIFloat "hudmainmenu/lootmenu/y" OffsetY
+		SetUIStringEx "hudmainmenu/lootmenu/_pc_take" "%k)" TakeKey
+		SetUIStringEx "hudmainmenu/lootmenu/_pc_open" "%k)" OpenKey
+		SetUIFloat "hudmainmenu/lootmenu/_xbox_take" TakeBtn
+		SetUIFloat "hudmainmenu/lootmenu/_xbox_open" OpenBtn
+		
+		set iMaxVisible to MaxVisibleItems
+		set bUpdateSettings to 0
+		set bRefresh to 1
+
+		; Added checks for DLC, RobCo Certified, More Perks perks - Roy
+
+		if IsModLoaded "HonestHearts.esm"
+			set iBuildRef to GetModIndex "HonestHearts.esm"
+			set rTribal to BuildRef iBuildRef 63097				; Tribal Wisdom
+		endif
+
+		if IsModLoaded "RobCo Certified.esm"
+			set iRobCo to 1
+			set iBuildRef to GetModIndex "RobCo Certified.esm"
+			set rRobCo to BuildRef iBuildRef 2118				; RobCo Certified
+			set rCrazed to BuildRef iBuildRef 156341			; Crazed Inventor
+			set rMad to BuildRef iBuildRef 359763				; Mad Scientist
+		endif
+
+		if IsModLoaded "More Perks.esm"
+			set iMorePerks to 1
+			set iBuildRef to GetModIndex "More Perks.esm"
+			set rTech to BuildRef iBuildRef 13823504			; Tech Junkie
+			set rChemical to BuildRef iBuildRef 13823540		; Chemical Engineer
+			set rRise to BuildRef iBuildRef 13823603			; Rise and Shine
+		endif
+
+		if IsModLoaded "More Perks Update.esp"
+			set iMorePerksU to 1
+			set iBuildRef to GetModIndex "More Perks.esm"
+			set rField to BuildRef iBuildRef 13823505			; Field Medic
+			set rRoach to BuildRef iBuildRef 13823509			; Roach Lover
+			set rRoachList to BuildRef iBuildRef 12322			; Roach Lover form list
+		endif
+
+		if IsModLoaded "More Perks for Old World Blues.esm"
+			set iMorePerksOWB to 1
+			set iBuildRef to GetModIndex "More Perks.esm"
+			set rTechOWB to BuildRef iBuildRef 13823620			; Tech Junkie OWB
+			set rGene to BuildRef iBuildRef 13823664			; Gene Splicer
+			set rGeneList to BuildRef iBuildRef 13881			; Gene Splicer form list
+		endif
+
+		SetEventHandler "RtLHUnlocked" LtMContainerUnlockedFUNC
+	endif
+
+	if GetGameRestarted
+
+		SetOnMenuOpenEventHandler LtMMenuOpenFUNC 1
+		
+	endif
+
+; Crosshair Processing ==========================
+	
+	; Check the crosshair ref. If it's not the same as the last check, we need to do some processing.
+	; First set the previous ref to the current one, then if the current ref isn't valid and the menu
+	; is open, disable the menu. Next check if the current ref is of a valid type to show the menu.
+	; If the type is valid, then turn it back on.
+
+	set rCurrRef to GetCrosshairRef
+	if (rCurrRef != rPrevRef)
+				
+		; If the current ref is not equal to the last container and looting is enabled, disable things
+		if ( (rContRef != rCurrRef) && bActiveLoot )
+			; printc "LtM: Main: Container invalid, disabling menu"
+			SetUIFloat "hudmainmenu/lootmenu/_enabled" 0
+			
+			set bActiveLoot to 0
+			set bRefresh to 0
+			set iOffset to 0
+			set iCurrentIndex to 0
+			set iTotalItems to 0
+			SetUIFloat "hudmainmenu/lootmenu/_owned" 0
+			
+			if (bToggleControls == 2)
+				set bToggleControls to 1
+			endif
+			
+			; Dispatch the same event sans parameters. See notes at top
+			DispatchEvent "LtMSelectedItem"
+			
+			if bCloseContainer
+				rPrevRef.SetDefaultOpen 0				; Set the container to closed again
+				if bOpenCloseSounds
+					set rSound to rContRef.GetContainerCloseSound
+					if IsFormValid rSound				; Test if form is valid
+						PlaySound rSound
+					endif
+				endif
+			endif
+		endif
+
+		; Get if player has the cannibal perk and is sneaking and container is an NPC
+		; 	pintocat: Added support for Tribal Wisdom (insect) and Ghastly Scavenger (abominations). 
+		;	Also adding IsFormValid, since otherwise this was only occuring
+		; 	AFTER the cannibal check and throwing errors in some cases at the cannibal check stage.
+		;   Roy: Added support for RobCo Certified and More Perks
+
+		set iCannibal to 0
+		if IsFormValid rCurrRef
+			if player.IsSneaking
+
+				if player.hasperk Cannibal == 0
+				elseif rCurrRef.GetType == 42
+					set iCannibal to 1
+				endif
+
+				if player.hasperk GhastlyScavenger == 0
+				elseif (rCurrRef.GetType == 43) == 0
+				elseif rCurrRef.GetCreatureType == 4 || rCurrRef.GetCreatureType == 5
+					set iCannibal to 1
+				endif
+
+				if IsFormValid rTribal == 0
+				elseif player.hasperk rTribal == 0
+				elseif (rCurrRef.GetType == 43) == 0
+				elseif rCurrRef.GetCreatureType == 2
+					set iCannibal to 1
+				endif
+
+				if iMorePerks
+
+					if IsFormValid rTech == 0
+					elseif player.hasperk rTech == 0
+					elseif (rCurrRef.GetType == 43) == 0
+					elseif rCurrRef.GetCreatureType == 6
+						set iCannibal to 1
+					endif
+
+					if IsFormValid rChemical == 0
+					elseif player.hasperk rChemical == 0
+					elseif rCurrRef.GetType == 21
+						set iCannibal to 1
+					endif
+
+					if IsFormValid rRise == 0
+					elseif player.hasperk rRise == 0
+					elseif rCurrRef.GetType == 42
+						set iCannibal to 1
+					endif
+
+					if IsFormValid rField == 0
+					elseif player.hasperk rField == 0
+					elseif rCurrRef.GetType == 42
+							set iCannibal to 1
+					endif
+
+				endif
+
+				if iMorePerksOWB
+					if IsFormValid rTechOWB == 0
+					elseif player.hasperk rTechOWB == 0
+					elseif (rCurrRef.GetType == 43) == 0
+					elseif rCurrRef.GetCreatureType == 6
+						set iCannibal to 1
+					endif
+				endif
+			endif
+
+			if iRobCo
+				if IsFormValid rRobCo == 0
+				elseif player.hasperk rRobCo == 0
+				elseif (rCurrRef.GetType == 43) == 0
+				elseif rCurrRef.GetCreatureType == 6
+					set iCannibal to 1
+				endif
+
+				if IsFormValid rCrazed == 0
+				elseif player.hasperk rCrazed == 0
+				elseif (rCurrRef.GetType == 43) == 0
+				elseif rCurrRef.GetCreatureType == 6
+					set iCannibal to 1
+				endif
+
+				if IsFormValid rMad == 0
+				elseif player.hasperk rMad == 0
+				elseif (rCurrRef.GetType == 43) == 0
+				elseif rCurrRef.GetCreatureType == 6
+					set iCannibal to 1
+				endif
+			endif
+
+			if iMorePerksU == 0
+			elseif IsFormValid rRoach == 0
+			elseif player.hasperk rRoach == 0
+			elseif rCurrRef.GetType == 43
+				set rBase to rCurrRef.gbf
+				if rBase.IsInList rRoachList
+					set iCannibal to 1
+				endif
+			endif
+
+			if iMorePerksOWB == 0
+			elseif IsFormValid rGene == 0
+			elseif player.hasperk rGene == 0
+			elseif rCurrRef.GetType == 43
+				set rBase to rCurrRef.gbf
+				if rBase.IsInList rGeneList
+					set iCannibal to 1
+				endif
+			endif
+		endif
+				
+		; Get if the current object is a valid container that the menu will show for
+		let bActiveLoot := Call LtMValidContainerFUNC rCurrRef
+		if (bActiveLoot)
+
+			; If aiming then return
+			if IsControlPressed 6
+				;printc "LtM: Aiming or Zooming, skipping"
+				set bActiveLoot to 0
+			; if in Kill Cam mode then return
+			elseif IsInKillCam
+				;printc "LtM: In Kill Cam, skipping"
+				set bActiveLoot to 0
+
+			; if in VATS then return
+			elseif GetVATSMode
+				;printc "LtM: In VATS, skipping"
+				set bActiveLoot to 0
+
+			elseif iCannibal
+			else
+				SetUIFloat "hudmainmenu/lootmenu/_enabled" 1
+				let iMaxVisible := GetUIFloat "hudmainmenu/lootmenu/_maxVisible"
+			
+				; If the object is an activator and we're here, it's an ash pile
+				if rCurrRef.GetType == 21
+					set rContRef to rCurrRef.GetAshPileSource
+					; printc "LtM: Main: Activator detected, getting ash pile source"
+				else
+					set rContRef to rCurrRef
+					; printc "LtM: Main: Container or NPC detected, setting rContRef"
+				endif
+
+				set bRefresh to 1
+				set bToggleControls to 1
+
+				if bOpenCloseSounds
+					set rSound to rContRef.GetContainerOpenSound
+					if IsFormValid rSound				; Test if form is valid
+						PlaySound rSound
+					endif
+				endif
+			endif
+		endif
+		
+		SetUIFloat "hudmainmenu/lootmenu/_listOffset" 0
+		SetUIFloat "hudmainmenu/lootmenu/_currentIndex" 0
+		SetUIFloat "hudmainmenu/lootmenu/_totalItems" 0
+		
+		set rPrevRef to rCurrRef
+	endif
+
+; Controls Management ===========================
+
+	; Menu on, toggle controls off
+	set iButtons to (1 + 2 + TakeBtn + OpenBtn)
+	if ( bToggleControls && bActiveLoot )
+		; printc "LtM: Main: Disabling controls"
+		;if (IsPC1stPerson)
+		;	DisableControl 13	; Toggle POV
+		;	DisableKey 264	; Disable Mouse Wheel Up
+		;	DisableKey 265	; Disable Mouse Wheel Down
+		;else
+			ToggleVanityWheel 0
+			if (bFOVSaved == 0)
+				set fVanityIn to GetNumericGameSetting "fVanityModeWheelInMult"
+				set fVanityOut to GetNumericGameSetting "fVanityModeWheelOutMult"
+				set bFOVSaved to 1
+			endif
+		;endif
+		; Check if current hotkey is a control key and disable control if it is
+		DisableKey OpenKey			; Activate
+		DisableKey TakeKey			; Reload 7
+		DisableButton iButtons		; Disables Controller button D-Pad Up, D-Pad Down, X, A
+		
+		; Set to 2 so we know controls are off so they can be enabled again
+		set bToggleControls to 2
+	
+	; Menu off, toggle controls on
+	elseif ( bToggleControls && (bActiveLoot == 0) )
+		; printc "LtM: Main: Enabling controls"
+		;if (IsPC1stPerson)
+			;EnableControl 13	; Toggle POV
+			;EnableKey 264	; Enable Mouse Wheel Up
+			;EnableKey 265	; Enable Mouse Wheel Down
+		;else
+			set bFOVSaved to 0
+			ToggleVanityWheel 1
+		;endif
+		EnableKey OpenKey			; Activate
+		EnableKey TakeKey			; Reload
+		EnableButton iButtons		; Disables Controller button D-Pad Up, D-Pad Down, X, A
+		
+		; Set back to 0 now that controls are enabled
+		set bToggleControls to 0
+	endif
+
+		if bActiveLoot
+			set bDpadUpLast to bDpadUp
+			set bDpadDownLast to bDpadDown
+			set bDpadUp to (IsButtonPressed 1)
+			set bDpadDown to (IsButtonPressed 2)
+			
+			if ( bDpadUp && bDpadUpLast )
+				set iDpadUpHeld to iDpadUpHeld + 1
+				if ( bDpadUpRepeating )
+					set iDpadUpRepeatCount to iDpadUpRepeatCount + 1
+				endif
+			else
+				set iDpadUpHeld to 0
+				set bDpadUpRepeating to 0
+				set iDpadUpRepeatCount to 0
+			endif
+			
+			if ( bDpadDown && bDpadDownLast )
+				set iDpadDownHeld to iDpadDownHeld + 1
+				if ( bDpadDownRepeating )
+					set iDpadDownRepeatCount to iDpadDownRepeatCount + 1
+				endif
+			else
+				set iDpadDownHeld to 0
+				set bDpadDownRepeating to 0
+				set iDpadDownRepeatCount to 0
+			endif
+			
+			if ( bDpadUp && (bDpadUpLast == 0) )
+				set bDpadUpFinal to 1
+			elseif ( iDpadUpHeld >= iDpadInitialDelay && bDpadUpRepeating == 0)
+				set bDpadUpFinal to 1
+				set bDpadUpRepeating to 1
+			elseif ( iDpadUpHeld >= iDpadInitialDelay && bDpadUpRepeating == 1 && iDpadUpRepeatCount >= iDpadRepeatDelay)
+				set bDpadUpFinal to 1
+				set iDpadUpRepeatCount to 0
+			else
+				set bDpadUpFinal to 0
+			endif
+			
+			if ( bDpadDown && (bDpadDownLast == 0) )
+				set bDpadDownFinal to 1
+			elseif ( iDpadDownHeld >= iDpadInitialDelay && bDpadDownRepeating == 0)
+				set bDpadDownFinal to 1
+				set bDpadDownRepeating to 1
+			elseif ( iDpadDownHeld >= iDpadInitialDelay && bDpadDownRepeating == 1 && iDpadDownRepeatCount >= iDpadRepeatDelay)
+				set bDpadDownFinal to 1
+				set iDpadDownRepeatCount to 0
+			else
+				set bDpadDownFinal to 0
+			endif
+			
+			if ( (IsKeyPressed ScrollUpKey 6) || bDpadUpFinal )		; Up
+				set iDirection to -1
+			elseif ( (IsKeyPressed ScrollDownKey 6) || bDpadDownFinal )	; Down
+				set iDirection to 1
+			endif
+		endif
+
+; Scroll Offset Update ==========================
+
+	; Direction of scrolling up or down: -1=Up, 1=Down, 0=Default, 2=Run but no change
+	if (bActiveLoot && (iDirection != 0) )
+		if ( iDirection == -1 )	; Up
+			; Printc "Up"
+			if (iCurrentIndex > 0)
+				let iCurrentIndex -= 1
+				playsound UIPipBoyScroll
+			endif
+			if (iCurrentIndex < iOffset)
+				let iOffset -= 1
+			endif
+			
+		elseif ( iDirection == 1 )	; Down
+			; Printc "Down"
+			if (iCurrentIndex < iTotalItems)
+				let iCurrentIndex += 1
+				if (iCurrentIndex < iTotalItems)
+					playsound UIPipboyScroll
+				endif
+			endif
+			if (iCurrentIndex >= iMaxVisible)
+				let iOffset += 1
+			endif
+		endif
+		
+		; Prevent offset running over either end
+		if (iOffset > (iTotalItems - iMaxVisible))
+			set iOffset to iTotalItems - iMaxVisible
+		endif
+		if (iOffset < 0)
+			set iOffset to 0
+		endif
+		
+		; Prevent current index running out of bounds
+		if (iCurrentIndex > (iTotalItems - 1))
+			set iCurrentIndex to iTotalItems - 1
+		elseif (iCurrentIndex < 0)
+			set iCurrentIndex to 0
+		endif
+		
+		set bRefresh to 1
+		SetUIFloat "hudmainmenu/lootmenu/_listOffset" iOffset
+		SetUIFloat "hudmainmenu/lootmenu/_currentIndex" iCurrentIndex
+		
+		set iDirection to 0
+	endif
+
+; Keypress Detection ============================
+
+	if (bActiveLoot)
+	
+		; Turn back on if it was turned off while in a menu
+		if (bMenuMode)
+			SetUIFloat "hudmainmenu/lootmenu/_enabled" 1
+			set bMenuMode to 0
+		endif
+		
+		; Take (Activate)								; A button
+		if ( (IsKeyPressed TakeKey 6) || (IsButtonPressed TakeBtn) )
+			if (bKeyTrap2 == 0)
+				set bKeyTrap2 to 1
+				
+				rContRef.SetDefaultOpen 1	; Set the container to open
+				set bCloseContainer to 1	; We opened this container
+				
+				; Refresh the UI
+				set bRefresh to 1
+				set iDirection to 2	; Recalculate offsets in case those changed.
+				
+				if (iTotalItems > 0)
+					if testexpr ( rItemTaken := aContItems[iCurrentIndex] )					
+						; Check if this is a dropped item
+						if eval ( (ar_Find rItemTaken aDropped) != ar_BadNumericIndex )
+							Call LtMTakeItemOrOpenContainerFUNC rContRef rItemTaken 1
+							
+						; Otherwise behave normally
+						else
+							Call LtMTakeItemOrOpenContainerFUNC rContRef rItemTaken 0
+						endif
+					endif
+				endif
+			endif
+		else
+			set bKeyTrap2 to 0
+		endif
+		
+		; Open (Reload) 7								; X button
+		if ( (IsKeyPressed OpenKey 6) || (IsButtonPressed OpenBtn) )
+			if (bKeyTrap3 == 0)
+				set bKeyTrap3 to 1
+				
+				set rItemTaken to 0
+				Call LtMTakeItemOrOpenContainerFUNC rContRef rItemTaken 0
+				Return
+			endif
+		else
+			set bKeyTrap3 to 0
+		endif
+	
+
+		
+	else
+		; Trap the keys when not in menu display so that on display of the menu
+		; it knows those keys/buttons were already held down.
+		
+		; Take (Activate)								; A button
+		if ( (IsKeyPressed TakeKey 6) || (IsButtonPressed TakeBtn) )
+			set bKeyTrap2 to 1
+		endif
+		
+		; Open (Reload) 7								; X button
+		if ( (IsKeyPressed OpenKey 6) || (IsButtonPressed OpenBtn) )
+			set bKeyTrap3 to 1
+		endif
+	endif
+END
+
+; Inventory Processing ==========================
+BEGIN GameMode
+	
+	if ( bActiveLoot && bRefresh )
+	
+		; Reset refresh until an item is taken
+		set bRefresh to 0
+	
+		; Get name of container
+		SetUIStringEx "hudmainmenu/lootmenu/_title_string" "%n" rContRef
+		
+		; Try to get items and continue if there are any
+		let aContItems := rContRef.GetAllItems 0 1 0 0
+		let aDropped := rContRef.GetDroppedRefs
+		if eval (aContItems || aDropped)
+		
+			; If no container items, create an empty array incase there are dropped items
+			if eval !(aContItems)
+				let aContItems := ar_Construct "array"
+			endif
+			
+			; If there are dropped items add them to the array as well.
+			if eval (aDropped)
+				ar_InsertRange aContItems 0 aDropped
+			endif
+			
+			; Sort items to appear in the proper order
+			let aContItems := Call LtMGetAndSortTypeFUNC aContItems
+	
+			; Send out an event for anyone who cares about the item selected
+			if testexpr ( aEventParams := ar_Map "CurrentItem"::aContItems[iCurrentIndex] )
+				DispatchEvent "LtMSelectedItem" aEventParams
+			else
+				DispatchEvent "LtMSelectedItem"
+			endif
+			
+			; Set total items for the UI
+			let iTotalItems := (ar_Size aContItems)
+			SetUIFloat "hudmainmenu/lootmenu/_totalItems" iTotalItems
+			
+			; If more than one item, sort the list by item types
+			; otherwise if 0 items let UI know and return
+
+			if (iTotalItems == 0)
+				SetUIFloat "hudmainmenu/lootmenu/_totalItems" 0
+				DispatchEvent "LtMSelectedItem"
+				Return
+			endif
+			
+			; Start at list offset, handles scrolling list
+			; (minus one because first loop iteration increments).
+			; Create path to output field, get count of each item, output.
+
+			set iCounter to 0
+			while ( (iCounter+=1) <= iMaxVisible )
+				let sPath := "hudmainmenu/lootmenu/_string" + $(iCounter)
+
+				; Added checks to prevent item counts from being applied to other items - shad0wshayd3
+
+				set iItemIndex to (iOffset + (iCounter - 1))
+				set iItemCount to 0
+
+				if TestExpr aContItems[iItemIndex]
+					let rTempRef := aContItems[iItemIndex]
+					if TestExpr rContRef.GetItemCount rTempRef
+						set iItemCount to rContRef.GetItemCount rTempRef
+					elseif TestExpr rTempRef.GetBaseObject
+						set rTempRef to rTempRef.GetBaseObject
+						set iItemCount to rContRef.GetItemCount rTempRef
+					else
+						set iItemCount to 0
+					endif
+
+					if (iItemCount > 1)
+						SetUIStringEx $sPath "%n (%g)" rTempRef iItemCount
+					else
+						SetUIStringEx $sPath "%n" rTempRef
+					endif
+				endif
+			loop
+			sv_Destruct sPath
+		else
+			SetUIFloat "hudmainmenu/lootmenu/_totalItems" 0
+			DispatchEvent "LtMSelectedItem"
+		endif
+	endif
+END
+
